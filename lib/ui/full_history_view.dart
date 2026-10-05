@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:iconify_flutter/icons/heroicons_solid.dart';
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../models/clipboard_item.dart';
 import '../services/clipboard_store.dart';
 import '../services/database_service.dart';
 import '../services/settings_service.dart';
@@ -180,24 +182,37 @@ class _IconButton extends StatelessWidget {
   }
 }
 
-class _HistoryPage extends StatelessWidget {
+class _HistoryPage extends StatefulWidget {
   const _HistoryPage();
+
+  @override
+  State<_HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<_HistoryPage> {
+  var _query = '';
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final store = context.watch<ClipboardStore>();
-    final items = store.history;
+    final items = _filterItems(store.history, _query);
 
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              Expanded(
+                child: _SearchField(
+                  hintText: 'Search history',
+                  onChanged: (query) => setState(() => _query = query),
+                ),
+              ),
+              const SizedBox(width: 8),
               TextButton.icon(
-                onPressed: items.isEmpty
+                onPressed: store.history.isEmpty
                     ? null
                     : () => _confirmClearClipboard(context, store),
                 icon: Iconify(HeroiconsSolid.trash, size: 15, color: theme.colorScheme.error),
@@ -211,9 +226,13 @@ class _HistoryPage extends StatelessWidget {
         ),
         Expanded(
           child: items.isEmpty
-              ? const _EmptyMessage(
-                  icon: HeroiconsSolid.inbox,
-                  text: 'No copied text yet',
+              ? _EmptyMessage(
+                  icon: _query.trim().isEmpty
+                      ? HeroiconsSolid.inbox
+                      : HeroiconsSolid.magnifying_glass,
+                  text: _query.trim().isEmpty
+                      ? 'No copied text yet'
+                      : 'No results for “${_query.trim()}”',
                 )
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -287,32 +306,46 @@ class _HistoryPage extends StatelessWidget {
   }
 }
 
-class _TrashPage extends StatelessWidget {
+class _TrashPage extends StatefulWidget {
   const _TrashPage();
+
+  @override
+  State<_TrashPage> createState() => _TrashPageState();
+}
+
+class _TrashPageState extends State<_TrashPage> {
+  var _query = '';
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final store = context.watch<ClipboardStore>();
-    final items = store.trash;
+    final items = _filterItems(store.trash, _query);
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: Text(
+            'Items are permanently deleted $trashRetentionDays days after being trashed.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  'Items are permanently deleted $trashRetentionDays days after being trashed.',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+                child: _SearchField(
+                  hintText: 'Search trash',
+                  onChanged: (query) => setState(() => _query = query),
                 ),
               ),
               const SizedBox(width: 8),
               TextButton.icon(
-                onPressed: items.isEmpty
+                onPressed: store.trash.isEmpty
                     ? null
                     : () => _confirmEmptyTrash(context, store),
                 icon: Iconify(
@@ -330,9 +363,13 @@ class _TrashPage extends StatelessWidget {
         ),
         Expanded(
           child: items.isEmpty
-              ? const _EmptyMessage(
-                  icon: HeroiconsSolid.trash,
-                  text: 'Trash is empty',
+              ? _EmptyMessage(
+                  icon: _query.trim().isEmpty
+                      ? HeroiconsSolid.trash
+                      : HeroiconsSolid.magnifying_glass,
+                  text: _query.trim().isEmpty
+                      ? 'Trash is empty'
+                      : 'No results for “${_query.trim()}”',
                 )
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -535,6 +572,96 @@ class _EmptyMessage extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Case-insensitive substring match on item content. A blank [query]
+/// returns [items] unchanged.
+List<ClipboardItem> _filterItems(List<ClipboardItem> items, String query) {
+  final needle = query.trim().toLowerCase();
+  if (needle.isEmpty) return items;
+  return items
+      .where((item) => item.content.toLowerCase().contains(needle))
+      .toList(growable: false);
+}
+
+class _SearchField extends StatefulWidget {
+  const _SearchField({required this.hintText, required this.onChanged});
+
+  final String hintText;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_SearchField> createState() => _SearchFieldState();
+}
+
+class _SearchFieldState extends State<_SearchField> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _clear() {
+    _controller.clear();
+    widget.onChanged('');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(chipRadius),
+      borderSide: BorderSide(color: theme.dividerColor),
+    );
+    return SizedBox(
+      height: 32,
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): _clear,
+        },
+        child: TextField(
+          controller: _controller,
+          onChanged: widget.onChanged,
+          style: theme.textTheme.bodyMedium,
+          cursorHeight: 14,
+          decoration: InputDecoration(
+            hintText: widget.hintText,
+            hintStyle: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            isDense: true,
+            filled: true,
+            fillColor: theme.colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.6),
+            contentPadding: const EdgeInsets.symmetric(vertical: 8),
+            prefixIcon: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9),
+              child: Iconify(
+                HeroiconsSolid.magnifying_glass,
+                size: 14,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            prefixIconConstraints: const BoxConstraints(minWidth: 32),
+            suffixIcon: ValueListenableBuilder(
+              valueListenable: _controller,
+              builder: (context, value, _) => value.text.isEmpty
+                  ? const SizedBox.shrink()
+                  : _IconButton(icon: HeroiconsSolid.x_circle, onTap: _clear),
+            ),
+            suffixIconConstraints: const BoxConstraints(minWidth: 32),
+            border: border,
+            enabledBorder: border,
+            focusedBorder: border.copyWith(
+              borderSide: BorderSide(color: theme.colorScheme.primary),
+            ),
+          ),
+        ),
       ),
     );
   }
